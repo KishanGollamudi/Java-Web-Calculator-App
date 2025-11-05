@@ -1,5 +1,5 @@
 pipeline {
-    agent { label 'SonarQube' }
+    agent { label 'sonar' }
 
     tools {
         jdk 'JDK17'
@@ -7,13 +7,13 @@ pipeline {
     }
 
     environment {
-        SONARQUBE_SERVER = 'SonarQube'
+        SONARQUBE_SERVER = 'sonar'
         MVN_SETTINGS = '/etc/maven/settings.xml'
-        NEXUS_URL = 'http://18.226.34.227:8081'
+        NEXUS_URL = 'http://54.234.225.51/:8081'
         NEXUS_REPO = 'maven-releases'
         NEXUS_GROUP = 'com/web/cal'
         NEXUS_ARTIFACT = 'webapp-add'
-        TOMCAT_URL = 'http://18.216.0.11:8080/manager/text'
+        TOMCAT_URL = 'http://34.207.110.47:8080/manager/text'
     }
 
     stages {
@@ -51,7 +51,7 @@ pipeline {
         /* === Stage 4: Upload Artifact to Nexus (via REST API) === */
         stage('Upload Artifact to Nexus') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'Nexus', usernameVariable: 'NEXUS_USR', passwordVariable: 'NEXUS_PSW')]) {
+                withCredentials([usernamePassword(credentialsId: 'nexus', usernameVariable: 'NEXUS_USR', passwordVariable: 'NEXUS_PSW')]) {
                     sh '''#!/bin/bash
                         set -e
                         WAR_FILE=$(ls target/*.war | head -1)
@@ -70,12 +70,12 @@ pipeline {
         }
 
         /* === Stage 5: Deploy to Tomcat === */
-        stage('Deploy to Tomcat') {
-            agent { label 'Tomcat' }
+        stage('Deploy to tomcat') {
+            agent { label 'tomcat' }
             steps {
                 withCredentials([
-                    usernamePassword(credentialsId: 'Nexus', usernameVariable: 'NEXUS_USR', passwordVariable: 'NEXUS_PSW'),
-                    usernamePassword(credentialsId: 'Tomcat', usernameVariable: 'TOMCAT_USR', passwordVariable: 'TOMCAT_PSW')
+                    usernamePassword(credentialsId: 'nexus', usernameVariable: 'NEXUS_USR', passwordVariable: 'NEXUS_PSW'),
+                    usernamePassword(credentialsId: 'tomcat', usernameVariable: 'TOMCAT_USR', passwordVariable: 'TOMCAT_PSW')
                 ]) {
                     sh '''#!/bin/bash
                         set -e
