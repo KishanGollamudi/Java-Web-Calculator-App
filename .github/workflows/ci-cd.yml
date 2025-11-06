@@ -1,4 +1,4 @@
-name: Java CI/CD - SonarQube, Nexus, Tomcat (Force Deploy)
+name: Java CI/CD - SonarQube, Nexus, Tomcat (Full Clean Deploy + Slack Alerts)
 
 on:
   push:
@@ -18,18 +18,19 @@ jobs:
       NEXUS_GROUP: com/web/cal
       NEXUS_ARTIFACT: webapp-add
       TOMCAT_URL: http://18.216.0.11:8080/manager/text
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
     steps:
-      - name: Checkout Code
+      - name: 📦 Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: ☕ Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Cache Maven Dependencies
+      - name: 🧰 Cache Maven Dependencies
         uses: actions/cache@v4
         with:
           path: ~/.m2
@@ -37,7 +38,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
-      - name: Run SonarQube Analysis
+      - name: 🔍 Run SonarQube Analysis
         run: |
           mvn clean verify sonar:sonar \
             -DskipTests \
@@ -45,13 +46,13 @@ jobs:
             -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }} \
             -Dsonar.login=${{ secrets.SONAR_TOKEN }}
 
-      - name: Build WAR File
+      - name: ⚙️ Build WAR File
         run: |
           mvn clean package -DskipTests
           echo "✅ Build completed!"
           ls -lh target/*.war
 
-      - name: Upload Artifact to Nexus
+      - name: ⬆️ Upload WAR to Nexus
         env:
           NEXUS_USER: ${{ secrets.NEXUS_USER }}
           NEXUS_PASS: ${{ secrets.NEXUS_PASS }}
@@ -59,19 +60,12 @@ jobs:
           set -e
           WAR_FILE=$(ls target/*.war | head -1)
           VERSION="0.0.${{ github.run_number }}"
-          echo "📤 Uploading WAR to Nexus version $VERSION ..."
+          echo "📦 Uploading WAR to Nexus version $VERSION ..."
           curl -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file "$WAR_FILE" \
             "${{ env.NEXUS_URL }}/repository/${{ env.NEXUS_REPO }}/${{ env.NEXUS_GROUP }}/${{ env.NEXUS_ARTIFACT }}/${VERSION}/${{ env.NEXUS_ARTIFACT }}-${VERSION}.war"
           echo "✅ Uploaded successfully."
 
-      - name: Setup SSH Access to Tomcat Server
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H 18.216.0.11 >> ~/.ssh/known_hosts
-
-      - name: Deploy WAR to Tomcat (Force Clean)
+      - name: 🚀 Deploy WAR to Tomcat (Force Clean)
         env:
           TOMCAT_USER: ${{ secrets.TOMCAT_USER }}
           TOMCAT_PASS: ${{ secrets.TOMCAT_PASS }}
@@ -79,15 +73,15 @@ jobs:
           NEXUS_PASS: ${{ secrets.NEXUS_PASS }}
         run: |
           set -e
-          cd /tmp
-          rm -f *.war
+          APP_NAME="webapp-add"
+          cd /tmp; rm -f *.war
 
           echo "🔍 Fetching latest WAR from Nexus..."
           DOWNLOAD_URL=$(curl -s -u ${NEXUS_USER}:${NEXUS_PASS} \
             "${{ env.NEXUS_URL }}/service/rest/v1/search/assets?repository=${{ env.NEXUS_REPO }}" \
             | grep -oP '"downloadUrl"\s*:\s*"[^"]*webapp-add-[0-9.]+\.war' | tail -1 | cut -d'"' -f4)
 
-          if [[ -z "$DOWNLOAD_URL" ]]; then
+          if [ -z "$DOWNLOAD_URL" ]; then
             echo "❌ No WAR found in Nexus!"
             exit 1
           fi
@@ -95,31 +89,58 @@ jobs:
           echo "⬇️ Downloading WAR: $DOWNLOAD_URL"
           curl -u ${NEXUS_USER}:${NEXUS_PASS} -O "$DOWNLOAD_URL"
           WAR_FILE=$(basename "$DOWNLOAD_URL")
-          APP_NAME=$(echo "$WAR_FILE" | sed 's/-[0-9].*//')
 
-          echo "🧹 Cleaning old deployment on remote Tomcat..."
-          ssh -o StrictHostKeyChecking=no ubuntu@18.216.0.11 "
-            sudo systemctl stop tomcat || true &&
-            rm -rf /home/ubuntu/apache-tomcat-9.0.111/webapps/${APP_NAME} &&
-            rm -f /home/ubuntu/apache-tomcat-9.0.111/webapps/${APP_NAME}.war &&
-            sudo systemctl start tomcat
-          "
+          echo "🧹 Undeploying old application..."
+          curl -u ${TOMCAT_USER}:${TOMCAT_PASS} "${{ env.TOMCAT_URL }}/undeploy?path=/${APP_NAME}" || true
+          sleep 5
 
-          echo "🚀 Deploying new WAR..."
+          echo "🧼 Cleaning Tomcat cache directories via manager text..."
+          curl -u ${TOMCAT_USER}:${TOMCAT_PASS} "${{ env.TOMCAT_URL }}/expire?path=/${APP_NAME}" || true
+          curl -u ${TOMCAT_USER}:${TOMCAT_PASS} "${{ env.TOMCAT_URL }}/reload?path=/${APP_NAME}" || true
+
+          echo "🚀 Deploying fresh WAR to Tomcat..."
           curl -u ${TOMCAT_USER}:${TOMCAT_PASS} --upload-file "$WAR_FILE" \
             "${{ env.TOMCAT_URL }}/deploy?path=/${APP_NAME}&update=true"
 
-          echo "✅ Restarting Tomcat remotely..."
-          ssh -o StrictHostKeyChecking=no ubuntu@18.216.0.11 "sudo systemctl restart tomcat"
-          echo "🔥 Deployment complete!"
+          echo "✅ Deployment completed successfully!"
 
-      - name: Verify Deployment
+      - name: 🔎 Verify Deployment
+        id: verify
         run: |
-          sleep 10
+          sleep 15
           STATUS=$(curl -o /dev/null -s -w "%{http_code}" http://18.216.0.11:8080/webapp-add/)
           if [ "$STATUS" -eq 200 ]; then
-            echo "✅ App is live with latest changes!"
+            echo "✅ App is live with the latest code!"
           else
             echo "⚠️ App returned status $STATUS"
             exit 1
           fi
+
+      # ✅ Slack Notification - Success
+      - name: ✅ Notify Slack (Success)
+        if: success()
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+          --data "{
+            \"text\": \":white_check_mark: *Deployment Successful!*\n
+            *Repository:* ${GITHUB_REPOSITORY}\n
+            *Branch:* ${GITHUB_REF_NAME}\n
+            *Commit:* <https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}|${GITHUB_SHA:0:7}>\n
+            *Run:* <${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|View Workflow>\n
+            *App URL:* http://18.216.0.11:8080/webapp-add/\"
+          }" \
+          ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      # ❌ Slack Notification - Failure
+      - name: ❌ Notify Slack (Failure)
+        if: failure()
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+          --data "{
+            \"text\": \":x: *Deployment Failed!*\n
+            *Repository:* ${GITHUB_REPOSITORY}\n
+            *Branch:* ${GITHUB_REF_NAME}\n
+            *Commit:* <https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}|${GITHUB_SHA:0:7}>\n
+            *Run:* <${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|View Workflow>\"
+          }" \
+          ${{ secrets.SLACK_WEBHOOK_URL }}
