@@ -13,11 +13,11 @@ jobs:
     env:
       SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      NEXUS_URL: http://18.226.34.227:8081
+      NEXUS_URL: http://18.209.9.207:8081
       NEXUS_REPO: maven-releases
       NEXUS_GROUP: com/web/cal
       NEXUS_ARTIFACT: webapp-add
-      TOMCAT_URL: http://18.216.0.11:8080/manager/text
+      TOMCAT_URL: http://98.81.123.228:8080/manager/text
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
     steps:
@@ -108,39 +108,10 @@ jobs:
         id: verify
         run: |
           sleep 15
-          STATUS=$(curl -o /dev/null -s -w "%{http_code}" http://18.216.0.11:8080/webapp-add/)
+          STATUS=$(curl -o /dev/null -s -w "%{http_code}" http://98.81.123.228:8080/webapp-add/)
           if [ "$STATUS" -eq 200 ]; then
             echo "✅ App is live with the latest code!"
           else
             echo "⚠️ App returned status $STATUS"
             exit 1
           fi
-
-      # ✅ Slack Notification - Success
-      - name: ✅ Notify Slack (Success)
-        if: success()
-        run: |
-          curl -X POST -H 'Content-type: application/json' \
-          --data "{
-            \"text\": \":white_check_mark: *Deployment Successful!*\n
-            *Repository:* ${GITHUB_REPOSITORY}\n
-            *Branch:* ${GITHUB_REF_NAME}\n
-            *Commit:* <https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}|${GITHUB_SHA:0:7}>\n
-            *Run:* <${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|View Workflow>\n
-            *App URL:* http://18.216.0.11:8080/webapp-add/\"
-          }" \
-          ${{ secrets.SLACK_WEBHOOK_URL }}
-
-      # ❌ Slack Notification - Failure
-      - name: ❌ Notify Slack (Failure)
-        if: failure()
-        run: |
-          curl -X POST -H 'Content-type: application/json' \
-          --data "{
-            \"text\": \":x: *Deployment Failed!*\n
-            *Repository:* ${GITHUB_REPOSITORY}\n
-            *Branch:* ${GITHUB_REF_NAME}\n
-            *Commit:* <https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}|${GITHUB_SHA:0:7}>\n
-            *Run:* <${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|View Workflow>\"
-          }" \
-          ${{ secrets.SLACK_WEBHOOK_URL }}
